@@ -25,8 +25,8 @@ if "data_summary" not in st.session_state:
     st.session_state.data_summary = None
 
 
-st.title("Hello, Ask your CSV!")
-st.markdown("Upload your data and ask questions in plain english 🎉")
+st.title("📊 Ask your CSV!")
+st.markdown("Upload your data and ask questions in plain english! 🎉")
 
 
 # Sidebar for file upload
@@ -148,6 +148,39 @@ if st.session_state.df is not None:
                     
                     reply = response.choices[0].message.content
                     st.markdown(reply)
+
+                    # Try to execute any code in the response
+                    if "```python" in reply:
+                        code_blocks = reply.split("```python")
+                        for i in range(1, len(code_blocks)):
+                            code = code_blocks[i].split("```")[0]
+                            
+                            try:
+                                # Create figure for potential plots
+                                plt.figure(figsize=(10, 6))
+                                
+                                # Execute code in controlled environment
+                                exec_globals = {
+                                    "df": df,
+                                    "pd": pd,
+                                    "plt": plt,
+                                    "sns": sns,
+                                    "st": st
+                                }
+                                
+                                exec(code.strip(), exec_globals)
+                                
+                                # Display plot if created
+                                fig = plt.gcf()
+                                if fig.get_axes():
+                                    st.pyplot(fig)
+                                
+                                plt.close()
+                                
+                            except Exception as e:
+                                st.error(f"Error executing code: {str(e)}")
+                                st.code(code, language="python")
+                                st.info("You can copy and modify this code to fix the error.")
                     
                     # Save assistant response to history
                     st.session_state.messages.append({"role": "assistant", "content": reply})
