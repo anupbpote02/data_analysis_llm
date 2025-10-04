@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import openai
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 st.set_page_config(
     page_title = 'Ask your CSV',
@@ -103,16 +105,31 @@ if st.session_state.df is not None:
             {df.to_string()}
             """
         
-        # System prompt
+        # Enhanced system prompt
         system_prompt = f"""You are a helpful data analyst assistant. 
         
         The user has uploaded a CSV file with the following information:
         {data_context}
         
+        The data is loaded in a pandas DataFrame called `df`.
+        
         Guidelines:
-        1. Answer the user's question clearly and concisely
-        2. Focus on providing insights about the data
-        3. Be specific and helpful
+        - Answer the user's question clearly and concisely
+        - If the question requires analysis, write Python code using pandas, matplotlib, or seaborn
+        - For visualizations, always use plt.figure() before plotting and include plt.tight_layout()
+        - Always validate data before operations (check for nulls, data types, etc.)
+        - If you can't answer due to data limitations, explain why
+        - Keep responses focused on the data and question asked
+        - Summarize your findings, insights, and any relevant statistics or visual trends.
+        - Focus on delivering the results and what they mean, not on how to get them.
+        - If a chart or visualization would help, display the chart in the response using matplotlib or seaborn.
+        - If a user asks for a specific visualization, display the chart in the response using matplotlib or seaborn.
+        
+        When writing code:
+        - Import statements are already done (pandas as pd, matplotlib.pyplot as plt, seaborn as sns)
+        - The dataframe is available as 'df'
+        - For plots, use plt.figure(figsize=(10, 6)) for better display
+        - Always add titles and labels to plots
         """
         
         # Generate response
