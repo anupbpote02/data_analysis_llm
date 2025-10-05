@@ -3,18 +3,78 @@ import pandas as pd
 import openai
 import matplotlib.pyplot as plt
 import seaborn as sns
+import warnings
+import datetime
+import base64
+from io import BytesIO
+
 
 st.set_page_config(
-    page_title = 'Ask your CSV',
+    page_title="Ask Your CSV",
     page_icon="📊",
-    layout = 'wide'
+    layout="wide"
 )
-
 
 # Initialize OpenAI client
 client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-
+# Helper function for export
+def export_conversation():
+    """Export conversation history as HTML (works like PDF when printed)"""
+    if not st.session_state.messages:
+        return None
+    
+    # Create HTML content with embedded styles
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; }}
+            h1 {{ color: #333; }}
+            h2 {{ color: #666; margin-top: 30px; }}
+            h3 {{ color: #888; margin-top: 20px; }}
+            .question {{ background-color: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0; }}
+            .answer {{ padding: 10px; margin: 10px 0; }}
+            .metadata {{ color: #999; font-size: 14px; }}
+            code {{ background-color: #f5f5f5; padding: 2px 4px; border-radius: 3px; }}
+            pre {{ background-color: #f5f5f5; padding: 10px; border-radius: 5px; overflow-x: auto; }}
+        </style>
+    </head>
+    <body>
+        <h1>Data Analysis Report</h1>
+        <p class="metadata">Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+    """
+    
+    # Add data summary
+    if st.session_state.df is not None:
+        html_content += f"""
+        <h2>Dataset Information</h2>
+        <ul>
+            <li>Total Rows: {st.session_state.df.shape[0]}</li>
+            <li>Total Columns: {st.session_state.df.shape[1]}</li>
+            <li>Column Names: {', '.join(st.session_state.df.columns)}</li>
+        </ul>
+        """
+    
+    # Add conversation
+    html_content += "<h2>Analysis Conversation</h2>"
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            html_content += f'<div class="question"><strong>Question:</strong> {msg["content"]}</div>'
+        else:
+            # Convert markdown code blocks to HTML
+            content = msg["content"].replace("```python", "<pre><code>").replace("```", "</code></pre>")
+            html_content += f'<div class="answer"><strong>Analysis:</strong><br>{content}</div>'
+            if "figure" in msg:
+                html_content += '<p><em>[Visualization generated - see application for details]</em></p>'
+    
+    html_content += """
+    </body>
+    </html>
+    """
+    
+    return html_content
 
 # Session state initialization
 if "messages" not in st.session_state:
@@ -24,10 +84,8 @@ if "df" not in st.session_state:
 if "data_summary" not in st.session_state:
     st.session_state.data_summary = None
 
-
-st.title("📊 Ask your CSV!")
-st.markdown("Upload your data and ask questions in plain english! 🎉")
-
+st.title("📊 Ask Your CSV")
+st.markdown("Upload your data and ask questions in plain English!")
 
 # Sidebar for file upload
 with st.sidebar:
@@ -47,7 +105,7 @@ with st.sidebar:
                 "sample": df.head(3).to_dict(),
                 "stats": df.describe().to_dict() if not df.empty else {}
             }
-
+            
             st.success(f"✅ Loaded {df.shape[0]} rows × {df.shape[1]} columns")
             
             # Data preview
@@ -69,6 +127,20 @@ with st.sidebar:
             st.info("Please make sure your file is a valid CSV format.")
     else:
         st.info("👆 Upload a CSV file to start analyzing!")
+    
+    # Export options (only show if there are messages)
+    if st.session_state.messages:
+        st.sidebar.markdown("---")
+        st.sidebar.header("💾 Export Options")
+        if st.sidebar.button("Generate Report"):
+            export_html = export_conversation()
+            st.sidebar.download_button(
+                label="📥 Download Report (HTML)",
+                data=export_html,
+                file_name=f"data_analysis_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                mime="text/html"
+            )
+            st.sidebar.info("💡 Tip: Open the HTML file and print to PDF for best results")
 
 
 # Main chat interface
@@ -77,6 +149,9 @@ if st.session_state.df is not None:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+            # Re-display any saved figures
+            if "figure" in msg:
+                st.pyplot(msg["figure"])
     
     # Chat input
     user_input = st.chat_input("Ask a question about your data")
@@ -88,7 +163,7 @@ if st.session_state.df is not None:
         # Display user message
         with st.chat_message("user"):
             st.markdown(user_input)
-
+        
         # Prepare data context with token optimization
         df = st.session_state.df
         if len(df) > 100:
@@ -134,21 +209,32 @@ if st.session_state.df is not None:
         
         # Generate response
         with st.chat_message("assistant"):
+            message_placeholder = st.empty()
             with st.spinner("Analyzing your data..."):
                 try:
+                    # Get conversation history for context
+                    messages = [{"role": "system", "content": system_prompt}]
+                    
+                    # Include last 3 exchanges for context
+                    for msg in st.session_state.messages[-6:]:
+                        content = msg["content"]
+                        # Truncate long messages in history to save tokens
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        messages.append({"role": msg["role"], "content": content})
+                    
+                    messages.append({"role": "user", "content": user_input})
+                    
                     response = client.chat.completions.create(
                         model="gpt-4.1",
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_input}
-                        ],
+                        messages=messages,
                         temperature=0.1,
                         max_tokens=1500
                     )
                     
                     reply = response.choices[0].message.content
-                    st.markdown(reply)
-
+                    message_placeholder.markdown(reply)
+                    
                     # Try to execute any code in the response
                     if "```python" in reply:
                         code_blocks = reply.split("```python")
@@ -156,35 +242,72 @@ if st.session_state.df is not None:
                             code = code_blocks[i].split("```")[0]
                             
                             try:
-                                # Create figure for potential plots
-                                plt.figure(figsize=(10, 6))
-                                
-                                # Execute code in controlled environment
-                                exec_globals = {
-                                    "df": df,
-                                    "pd": pd,
-                                    "plt": plt,
-                                    "sns": sns,
-                                    "st": st
-                                }
-                                
-                                exec(code.strip(), exec_globals)
-                                
-                                # Display plot if created
-                                fig = plt.gcf()
-                                if fig.get_axes():
-                                    st.pyplot(fig)
-                                
-                                plt.close()
+                                # Capture warnings
+                                with warnings.catch_warnings(record=True) as w:
+                                    warnings.simplefilter("always")
+                                    
+                                    # Create figure for potential plots
+                                    plt.figure(figsize=(10, 6))
+                                    
+                                    # Execute code in controlled environment
+                                    exec_globals = {
+                                        "df": df,
+                                        "pd": pd,
+                                        "plt": plt,
+                                        "sns": sns,
+                                        "st": st
+                                    }
+                                    
+                                    exec(code.strip(), exec_globals)
+                                    
+                                    # Display any warnings
+                                    if w:
+                                        for warning in w:
+                                            st.info(f"Note: {warning.message}")
+                                    
+                                    # Display plot if created
+                                    fig = plt.gcf()
+                                    if fig.get_axes():
+                                        st.pyplot(fig)
+                                        # Save figure in message for persistence
+                                        st.session_state.messages.append({
+                                            "role": "assistant",
+                                            "content": reply,
+                                            "figure": fig
+                                        })
+                                    else:
+                                        st.session_state.messages.append({
+                                            "role": "assistant",
+                                            "content": reply
+                                        })
+                                    
+                                    plt.close()
                                 
                             except Exception as e:
-                                st.error(f"Error executing code: {str(e)}")
+                                error_type = type(e).__name__
+                                st.error(f"Code execution failed: {error_type}")
+                                
+                                # Provide helpful context based on error type
+                                if "NameError" in str(e):
+                                    st.info("This might mean a column name is misspelled or doesn't exist.")
+                                elif "TypeError" in str(e):
+                                    st.info("This often happens when trying to plot non-numeric data.")
+                                elif "KeyError" in str(e):
+                                    st.info("The specified column might not exist in your dataset.")
+                                else:
+                                    st.info("Try rephrasing your question or check your data format.")
+                                
                                 st.code(code, language="python")
-                                st.info("You can copy and modify this code to fix the error.")
+                    else:
+                        # No code in response
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": reply
+                        })
                     
-                    # Save assistant response to history
-                    st.session_state.messages.append({"role": "assistant", "content": reply})
-                    
+                except openai.APIError as e:
+                    st.error(f"OpenAI API Error: {str(e)}")
+                    st.info("Please check your API key and try again.")
                 except Exception as e:
                     st.error(f"Error generating response: {str(e)}")
                     st.info("Please try again or rephrase your question.")
@@ -203,3 +326,12 @@ else:
         - What's the average value by month?
         - Are there any outliers in the price column?
         """)
+
+# Footer with tips
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: gray; font-size: 12px;'>
+💡 Tip: Be specific with your questions for better results | 
+🔒 Your data stays private and is not stored
+</div>
+""", unsafe_allow_html=True)
